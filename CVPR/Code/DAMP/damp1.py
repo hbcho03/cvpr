@@ -52,19 +52,20 @@ def IM_loss(outputs_target, mask_lt):
     item2 = -torch.sum(softmax_outs_t * torch.log(softmax_outs_t + 1e-5)) / float(batch_size)
     return item2 - item1
 
+#new
 def new_loss(text_x, text_u, logit_scale):
-    text_x_mean = torch.mean(text_x,dim=0)    #(K,C)
-    text_u_mean = torch.mean(text_u,dim=0)    #(K,C)
+    text_x_mean = torch.mean(text_x,dim=0)    #(K1,C)
+    text_u_mean = torch.mean(text_u,dim=0)    #(K2,C)
     logits_x = torch.einsum('apc,qc->apq',text_x,text_u_mean) #(A,K1,K2)
-    logits_x = logits_x.permute(0,2,1)
+    logits_x = logits_x.reshape(-1,logits_x.shape[-1])        #(A*K1,K2)
     logits_x = logits_x*logit_scale
-    logits_u = torch.einsum('bpc,qc->bpq',text_u,text_x_mean) #(B,K,K)
-    logits_u = logits_u.permute(0,2,1)
+    logits_u = torch.einsum('bpc,qc->bpq',text_u,text_x_mean) #(B,K2,K1)
+    logits_u = logits_u.reshape(-1,logits_u.shape[-1])        #(B*K2,K1)
     logits_u = logits_u*logit_scale
     new_label_x = torch.arange(text_x.shape[1], dtype=torch.long).to(logits_x.device)
-    new_label_x = new_label_x.expand(text_x.shape[0],-1)
+    new_label_x = new_label_x.repeat(text_x.shape[0])  #(A*K1)
     new_label_u = torch.arange(text_u.shape[1], dtype=torch.long).to(logits_u.device)
-    new_label_u = new_label_u.expand(text_u.shape[0],-1)
+    new_label_u = new_label_u.repeat(text_u.shape[0])  #(B*K2)
     new_loss_x = F.cross_entropy(logits_x,new_label_x)
     new_loss_u = F.cross_entropy(logits_u,new_label_u)
     return new_loss_x + new_loss_u
@@ -501,6 +502,7 @@ class CustomCLIP(nn.Module):
             return_all.append(global_feat)
             return_all.append(updated_vision_embedding)
 
+        #new
         return_all.append(visual)   #(B,C)
         return_all.append(text)     #(B,K,C)
 
@@ -858,22 +860,12 @@ class DAMP(TrainerXU):
         data_loader = self.test_loader
         print("Do evaluation on test set")
 
-        test_time = AverageMeter()
-        end = time.time()
-
         for batch_idx, batch in enumerate(data_loader):
             input, label = self.parse_batch_test(batch)
             output = self.model_inference(input)[0]
-            test_time.update(time.time() - end)
             self.evaluator.process(output, label)
 
-            end = time.time()
-
-
         results = self.evaluator.evaluate()
-        print("test_batch_time: {test_time.avg:.3f}.format(
-                          test_time=test_time
-                      ))
         for k, v in results.items():
             tag = "{}/{}".format(split, k)
             self.write_scalar(tag, v, self.epoch)

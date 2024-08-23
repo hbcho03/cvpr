@@ -52,7 +52,6 @@ def IM_loss(outputs_target, mask_lt):
     item2 = -torch.sum(softmax_outs_t * torch.log(softmax_outs_t + 1e-5)) / float(batch_size)
     return item2 - item1
 
-
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
         super().__init__()
@@ -485,9 +484,6 @@ class CustomCLIP(nn.Module):
             return_all.append(global_feat)
             return_all.append(updated_vision_embedding)
 
-        return_all.append(visual)   #(B,C)
-        return_all.append(text)     #(B,K,C)
-
         return tuple(return_all)
 
 @TRAINER_REGISTRY.register()
@@ -700,12 +696,11 @@ class DAMP(TrainerXU):
         prec = self.cfg.TRAINER.DAMP.PREC
         if prec == "amp":
             with autocast():
-                output_x, output_x_ind, visual_x, text_x = self.model(image_x, ind =True, pse=False)
-                output_u, output_u_ind, pseudo_label_logits, visual_u, text_u = self.model(image_u, ind=True, pse=True)
+                output_x, output_x_ind = self.model(image_x, ind =True, pse=False)
+                output_u, output_u_ind, pseudo_label_logits = self.model(image_u, ind=True, pse=True)
                 output_x2 = self.model(image_x2)[0]
                 output_u2 = self.model(image_u2)[0]
-                logit_scale = self.model.logit_scale
-
+                
                 # only clip annotation
                 mix_lambda = self.epoch / self.max_epoch
                 pseudo_label = (torch.softmax(output_u.reshape(-1, self.n_cls), dim=-1) * mix_lambda + torch.softmax(pseudo_label_logits.reshape(-1, self.n_cls), dim=-1) * (1-mix_lambda)).detach()  
@@ -730,22 +725,7 @@ class DAMP(TrainerXU):
                 
                 loss_im = IM_loss(output_u, mask_lt)
 
-                #new
-                logits_x = torch.einsum('ac,bkc->abk', visual_x, text_u)  #(A,B,K)
-                logits_u = torch.einsum('bc,akc->bak', visual_u, text_x)  #(B,A,K)
-                logits_x = logits_x.reshape(-1,logits_x.shape[-1])        #(AB,K)
-                logits_x = logits_x*logit_scale
-                logits_u = logits_u.reshape(-1,logits_x.shape[-1])        #(BA,K)
-                logits_u = logits_u*logit_scale
-                label_new_x = label.repeat(self.cfg.DATALOADER.TRAIN_U.BATCH_SIZE)   #(AB)
-                label_new_y = label_p.repeat(self.cfg.DATALOADER.TRAIN_X.BATCH_SIZE) #(BA)
-                mask_ge_new = mask_ge.repeat(self.cfg.DATALOADER.TRAIN_X.BATCH_SIZE) #(BA)
-                loss_new1 = F.cross_entropy(logits_x, label_new_x)
-                loss_new2 = torch.tensor(0.0).cuda() if mask_ge_new.sum() == 0 else (F.cross_entropy(logits_u, label_new_y, reduction='none') * mask_ge_new).sum() / mask_ge_new.sum()
-                loss_new = loss_new1 + loss_new2
-
-
-                loss = (loss_x + loss_x2) + self.cfg.TRAINER.DAMP.U * (loss_u + loss_u2) + loss_ind + loss_im + loss_new
+                loss = (loss_x + loss_x2) + self.cfg.TRAINER.DAMP.U * (loss_u + loss_u2) + loss_ind + loss_im
 
                 self.optim_p.zero_grad()
                 self.optim_c.zero_grad()
@@ -771,14 +751,12 @@ class DAMP(TrainerXU):
             self.model.prompt_learner.gamma_t,
             # "contrastive_T":
             # self.model.prompt_learner.contrastive_T
-            "loss_ind":
-            loss_ind,
+            "loss_x_ind":
+            loss_x_ind,
             # "loss_u_ind":
             # loss_u_ind,
-            "loss_im":
-            loss_im,
-            "loss_new":
-            loss_new
+            # "loss_im":
+            # loss_im
         }
 
         self.update_lr()
@@ -855,12 +833,22 @@ class DAMP(TrainerXU):
         data_loader = self.test_loader
         print("Do evaluation on test set")
 
+        test_time = AverageMeter()
+        end = time.time()
+
         for batch_idx, batch in enumerate(data_loader):
             input, label = self.parse_batch_test(batch)
             output = self.model_inference(input)[0]
+            test_time.update(time.time() - end)
             self.evaluator.process(output, label)
 
+            end = time.time()
+
+
         results = self.evaluator.evaluate()
+        print("test_batch_time: {test_time.avg:.3f}".format(
+                          test_time=test_time
+                      ))
         for k, v in results.items():
             tag = "{}/{}".format(split, k)
             self.write_scalar(tag, v, self.epoch)

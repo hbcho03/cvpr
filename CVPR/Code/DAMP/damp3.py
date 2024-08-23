@@ -408,6 +408,10 @@ class CustomCLIP(nn.Module):
         self.text_encoder = TextEncoder(clip_model)
         self.context_decoder = ContextDecoder(cfg) #PromptGeneratorWithDecoder(cfg) #ContextDecoder(cfg)
         print(self.context_decoder)
+
+        #new
+        self.new_context_decoder = ContextDecoder(cfg, transformer_width=64, transformer_layers=3)
+
         self.prompt_learner = PromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
 
@@ -439,6 +443,10 @@ class CustomCLIP(nn.Module):
         text_embeddings, text_contexts = self.text_encoder(raw_prompt, tokenized_prompts)
         text_embeddings = text_embeddings.expand(B, -1, -1) # B, K, C
         text_contexts = text_contexts.expand(B, -1, -1, -1)[:,0,:self.prompt_learner.n_ctx,:] # B, L, C
+
+        #new
+        new_visual_contexts = self.new_context_decoder(visual_contexts, text_contexts)
+
         # update visual prompting
         if self.use_visual_prompt_generator:
             # update visual_embeddings by text_context, post-model prompting refines the visual_embeddings
@@ -451,7 +459,7 @@ class CustomCLIP(nn.Module):
         if self.use_text_prompt_generator:
             # update text_embeddings by visual_context, post-model prompting refines the text_embeddings
             # text_embeddings: # (B, K, C) visual_contexts: B, (1+H*W), C
-            text_diff = self.context_decoder(text_embeddings, visual_contexts)
+            text_diff = self.context_decoder(text_embeddings, new_visual_contexts)
             # (B, K, C) 
             updated_text_embeddings = text_embeddings + self.prompt_learner.gamma_t * text_diff
 
@@ -755,8 +763,8 @@ class DAMP(TrainerXU):
             loss_x_ind,
             # "loss_u_ind":
             # loss_u_ind,
-            # "loss_im":
-            # loss_im
+            "loss_im":
+            loss_im
         }
 
         self.update_lr()
@@ -833,22 +841,12 @@ class DAMP(TrainerXU):
         data_loader = self.test_loader
         print("Do evaluation on test set")
 
-        test_time = AverageMeter()
-        end = time.time()
-
         for batch_idx, batch in enumerate(data_loader):
             input, label = self.parse_batch_test(batch)
             output = self.model_inference(input)[0]
-            test_time.update(time.time() - end)
             self.evaluator.process(output, label)
 
-            end = time.time()
-
-
         results = self.evaluator.evaluate()
-        print("test_batch_time: {test_time.avg:.3f}.format(
-                          test_time=test_time
-                      ))
         for k, v in results.items():
             tag = "{}/{}".format(split, k)
             self.write_scalar(tag, v, self.epoch)
