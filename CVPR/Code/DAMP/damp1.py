@@ -722,7 +722,7 @@ class DAMP(TrainerXU):
                 output_u, output_u_ind, pseudo_label_logits, visual_u, text_u = self.model(image_u, ind=True, pse=True)
                 output_x2 = self.model(image_x2)[0]
                 output_u2 = self.model(image_u2)[0]
-                logit_scale = self.model.logit_scale
+                logit_scale = self.model.logit_scale.exp()
 
                 # only clip annotation
                 mix_lambda = self.epoch / self.max_epoch
