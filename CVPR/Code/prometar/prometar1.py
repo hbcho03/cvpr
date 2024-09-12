@@ -445,8 +445,9 @@ class ProMetaR(TrainerX):
 
             # new
             if self.batch_idx !=0 and (self.x_qry_save.size(0) >= x_sup.size(0)):
-                x_qry2 = self.x_qry_save[torch.randperm(self.x_qry_save.size(0))][:x_sup.size(0)]
-                y_qry2 = self.y_qry_save[torch.randperm(self.y_qry_save.size(0))][:x_sup.size(0)]
+                rand_sample = torch.randperm(self.x_qry_save.size(0))
+                x_qry2 = self.x_qry_save[rand_sample][:x_sup.size(0)]
+                y_qry2 = self.y_qry_save[rand_sample][:x_sup.size(0)]
             else:
                 x_qry2 = x_sup
                 y_qry2 = y_sup
